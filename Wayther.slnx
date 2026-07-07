@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Wayther/Wayther.csproj" />
+  </Folder>
+</Solution>

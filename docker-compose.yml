@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wayther}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wayther}
+      POSTGRES_DB: ${POSTGRES_DB:-wayther}
+    volumes:
+      - wayther-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wayther} -d ${POSTGRES_DB:-wayther}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Postgres: "Host=db;Port=5432;Database=${POSTGRES_DB:-wayther};Username=${POSTGRES_USER:-wayther};Password=${POSTGRES_PASSWORD:-wayther}"
+    ports:
+      - "8080:8080"
+
+volumes:
+  wayther-db:

@@ -55,3 +55,13 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Built SPA bundle copied into the backend at Docker build time
+src/Wayther/wwwroot/
+
+# macOS
+.DS_Store

@@ -1,0 +1,10 @@
+**/bin
+**/obj
+**/node_modules
+frontend/dist
+src/Wayther/wwwroot
+.git
+.env
+.agents
+.claude
+docs
