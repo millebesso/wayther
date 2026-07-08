@@ -23,6 +23,7 @@ services:
     environment:
       ConnectionStrings__Postgres: "Host=db;Port=5432;Database=${POSTGRES_DB:-wayther};Username=${POSTGRES_USER:-wayther};Password=${POSTGRES_PASSWORD:-wayther}"
       ORS_API_KEY: ${ORS_API_KEY:-}
+      METNO_USER_AGENT: ${METNO_USER_AGENT:-}
     ports:
       - "8080:8080"
 
