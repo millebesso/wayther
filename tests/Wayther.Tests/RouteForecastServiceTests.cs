@@ -3,10 +3,11 @@ using Wayther.Domain;
 namespace Wayther.Tests;
 
 /// <summary>
-/// Exercises the pure-Domain sampling logic through the <see cref="IRoutingProvider"/>
+/// Exercises the pure-Domain orchestration through the <see cref="IRoutingProvider"/>
 /// and <see cref="IWeatherProvider"/> seams with faked providers — no network. The
-/// route geometry and per-segment durations are canned; the assertions are on the
-/// produced samples (where and when), never on internals.
+/// route geometry, per-segment durations and weather timeline are canned; the
+/// assertions are on the produced samples (where, when, and which forecast bucket),
+/// never on internals.
 /// </summary>
 public class RouteForecastServiceTests
 {
@@ -173,6 +174,67 @@ public class RouteForecastServiceTests
     }
 
     [Fact]
+    public async Task Each_sample_gets_the_nearest_hour_forecast_bucket()
+    {
+        // A 100-minute route sampled every 40 min lands arrivals at clear,
+        // non-tied minutes: 09:00, 09:40, 10:20, and the 10:40 arrival. The canned
+        // timeline tags each hour with a distinct symbol so we can read back which
+        // bucket was chosen — nearest hour, no interpolation.
+        var weather = new FakeWeatherProvider(HourlyTimeline(Departure, hours: 4));
+        var service = new RouteForecastService(
+            new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 6000, end: Destination)), weather);
+
+        var forecast = await service.GetRouteForecastAsync(
+            Origin, Destination, Departure, TimeSpan.FromMinutes(40));
+
+        Assert.Collection(
+            forecast.Samples.Select(s => s.Forecast.SymbolCode),
+            symbol => Assert.Equal("h09", symbol),   // 09:00 → 09:00
+            symbol => Assert.Equal("h10", symbol),   // 09:40 → 10:00
+            symbol => Assert.Equal("h10", symbol),   // 10:20 → 10:00
+            symbol => Assert.Equal("h11", symbol));  // 10:40 arrival → 11:00
+        // Temperature and precipitation travel with the selected bucket.
+        Assert.Equal(11, forecast.Samples[^1].Forecast.TemperatureCelsius);
+        Assert.Equal(1.1, forecast.Samples[^1].Forecast.PrecipitationMm, 6);
+    }
+
+    [Fact]
+    public async Task Nearest_hour_tie_resolves_to_the_earlier_hour()
+    {
+        // A 30-minute route: the arrival at 09:30 is equidistant from 09:00 and
+        // 10:00; the earlier hour wins.
+        var weather = new FakeWeatherProvider(HourlyTimeline(Departure, hours: 3));
+        var service = new RouteForecastService(
+            new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 1800, end: Destination)), weather);
+
+        var forecast = await service.GetRouteForecastAsync(
+            Origin, Destination, Departure, TimeSpan.FromMinutes(60));
+
+        Assert.Equal("h09", forecast.Samples[^1].Forecast.SymbolCode);
+    }
+
+    [Fact]
+    public async Task Coordinates_are_rounded_to_four_decimals_before_querying_weather()
+    {
+        // Geometry carries more than 4 dp of precision; met.no must be queried with
+        // the coordinate rounded to ≤4 dp.
+        var end = new Coordinate(0, 0.123456789);
+        var weather = new FakeWeatherProvider(HourlyTimeline(Departure, hours: 2));
+        var service = new RouteForecastService(
+            new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 600, end: end)), weather);
+
+        await service.GetRouteForecastAsync(Origin, end, Departure, TimeSpan.FromMinutes(30));
+
+        Assert.All(weather.Queried, c =>
+        {
+            Assert.Equal(c.Latitude, Math.Round(c.Latitude, 4), 10);
+            Assert.Equal(c.Longitude, Math.Round(c.Longitude, 4), 10);
+        });
+        // The arrival's high-precision longitude is rounded to 4 dp (0.1235).
+        Assert.Contains(weather.Queried, c => c.Longitude == 0.1235);
+    }
+
+    [Fact]
     public async Task Non_positive_interval_is_rejected()
     {
         var service = CreateService(UnevenPaceRoute());
@@ -182,7 +244,24 @@ public class RouteForecastServiceTests
     }
 
     private static RouteForecastService CreateService(Route route) =>
-        new(new FakeRoutingProvider(route), new UnusedWeatherProvider());
+        new(new FakeRoutingProvider(route), new FakeWeatherProvider(HourlyTimeline(Departure, hours: 4)));
+
+    /// <summary>An hourly timeline from <paramref name="start"/>, each hour tagged distinctly ("h09", 9°, 0.9 mm).</summary>
+    private static WeatherTimeline HourlyTimeline(DateTimeOffset start, int hours)
+    {
+        var entries = new List<WeatherHour>();
+        for (var i = 0; i < hours; i++)
+        {
+            var time = start.AddHours(i);
+            var forecast = new WeatherForecast(
+                SymbolCode: $"h{time.Hour:00}",
+                TemperatureCelsius: time.Hour,
+                PrecipitationMm: time.Hour / 10.0);
+            entries.Add(new WeatherHour(time, forecast));
+        }
+
+        return new WeatherTimeline(entries);
+    }
 
     private static void AssertCoordinate(Coordinate expected, Coordinate actual)
     {
@@ -197,12 +276,15 @@ public class RouteForecastServiceTests
             Task.FromResult(route);
     }
 
-    // This slice produces samples but no weather. If the sampling logic ever reaches
-    // for the weather seam, that is a bug — so fail loudly rather than silently.
-    private sealed class UnusedWeatherProvider : IWeatherProvider
+    private sealed class FakeWeatherProvider(WeatherTimeline timeline) : IWeatherProvider
     {
-        public Task<WeatherForecast> GetForecastAsync(
-            Coordinate location, DateTimeOffset time, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Weather is not sampled in this slice.");
+        public List<Coordinate> Queried { get; } = [];
+
+        public Task<WeatherTimeline> GetForecastAsync(
+            Coordinate location, CancellationToken cancellationToken = default)
+        {
+            Queried.Add(location);
+            return Task.FromResult(timeline);
+        }
     }
 }

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MapContainer, Marker, Polyline, TileLayer, useMapEvents } from 'react-leaflet'
+import { MapContainer, Marker, Polyline, Popup, TileLayer, useMapEvents } from 'react-leaflet'
 import L, { type LatLngExpression } from 'leaflet'
 import './App.css'
 
 type Point = { lat: number; lon: number }
-type Sample = { lat: number; lon: number; time: string }
+type Forecast = { symbolCode: string; temperatureCelsius: number; precipitationMm: number }
+type Sample = { lat: number; lon: number; time: string; forecast: Forecast }
 
 const originIcon = makePinIcon('A', '#1a7f37')
 const destinationIcon = makePinIcon('B', '#cf222e')
@@ -55,43 +56,80 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="controls">
-        <label className="control">
-          <span>Departure</span>
-          <select value={departure} onChange={(e) => setDeparture(e.target.value)}>
-            {departureSlots.map((slot) => (
-              <option key={slot.value} value={slot.value}>
-                {slot.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="control">
-          <span>Sample every</span>
-          <select value={sampleInterval} onChange={(e) => setSampleInterval(Number(e.target.value) as Interval)}>
-            {INTERVAL_OPTIONS.map((minutes) => (
-              <option key={minutes} value={minutes}>
-                {minutes} min
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="map-pane">
+        <div className="controls">
+          <label className="control">
+            <span>Departure</span>
+            <select value={departure} onChange={(e) => setDeparture(e.target.value)}>
+              {departureSlots.map((slot) => (
+                <option key={slot.value} value={slot.value}>
+                  {slot.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control">
+            <span>Sample every</span>
+            <select value={sampleInterval} onChange={(e) => setSampleInterval(Number(e.target.value) as Interval)}>
+              {INTERVAL_OPTIONS.map((minutes) => (
+                <option key={minutes} value={minutes}>
+                  {minutes} min
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <MapContainer center={[59.91, 10.75]} zoom={6} className="map">
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <ClickHandler onClick={handleMapClick} />
+          <DraggablePin point={origin} icon={originIcon} onMove={setOrigin} />
+          <DraggablePin point={destination} icon={destinationIcon} onMove={setDestination} />
+          {route.length > 0 && <Polyline positions={route} color="#0969da" weight={5} />}
+          {samples.map((sample, i) => (
+            <Marker key={i} position={[sample.lat, sample.lon]} icon={weatherIcon(sample.forecast)}>
+              <Popup>
+                <strong>{formatTime(sample.time)}</strong>
+                <br />
+                {weatherEmoji(sample.forecast.symbolCode)} {formatTemperature(sample.forecast.temperatureCelsius)}
+                <br />
+                {formatPrecipitation(sample.forecast.precipitationMm)}
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+        <p className="hint">{hintFor(origin, destination)}</p>
       </div>
 
-      <MapContainer center={[59.91, 10.75]} zoom={6} className="map">
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <ClickHandler onClick={handleMapClick} />
-        <DraggablePin point={origin} icon={originIcon} onMove={setOrigin} />
-        <DraggablePin point={destination} icon={destinationIcon} onMove={setDestination} />
-        {route.length > 0 && <Polyline positions={route} color="#0969da" weight={5} />}
-        {samples.map((sample, i) => (
-          <Marker key={i} position={[sample.lat, sample.lon]} icon={etaIcon(sample.time)} />
-        ))}
-      </MapContainer>
-      <p className="hint">{hintFor(origin, destination)}</p>
+      <aside className="timeline">
+        <h1>Weather along the way</h1>
+        {samples.length === 0 ? (
+          <p className="timeline-empty">Pick a start and destination to see the forecast along your route.</p>
+        ) : (
+          <ol className="timeline-list">
+            {samples.map((sample, i) => (
+              <li key={i} className="timeline-row">
+                <span className="timeline-time">{formatTime(sample.time)}</span>
+                <span className="timeline-symbol">{weatherEmoji(sample.forecast.symbolCode)}</span>
+                <span className="timeline-temp">{formatTemperature(sample.forecast.temperatureCelsius)}</span>
+                <span className={`timeline-rain${isRaining(sample.forecast) ? ' is-raining' : ''}`}>
+                  {isRaining(sample.forecast) ? `🌧 ${formatMm(sample.forecast.precipitationMm)}` : 'Dry'}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <footer className="attribution">
+          Weather data from{' '}
+          <a href="https://www.met.no/en" target="_blank" rel="noreferrer">
+            MET Norway
+          </a>{' '}
+          (CC BY 4.0)
+        </footer>
+      </aside>
     </div>
   )
 }
@@ -198,13 +236,56 @@ function makePinIcon(label: string, color: string): L.DivIcon {
   })
 }
 
-/** A marker labelled with the estimated time of arrival at a sampled position. */
-function etaIcon(time: string): L.DivIcon {
-  const label = new Date(time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+/** A marker showing the sample's weather symbol and temperature at a glance. */
+function weatherIcon(forecast: Forecast): L.DivIcon {
+  const emoji = weatherEmoji(forecast.symbolCode)
+  const temp = formatTemperature(forecast.temperatureCelsius)
   return L.divIcon({
-    className: 'eta',
-    html: `<span class="eta-dot"></span><span class="eta-label">${label}</span>`,
-    iconSize: [12, 12],
-    iconAnchor: [6, 6],
+    className: 'weather',
+    html: `<span class="weather-symbol">${emoji}</span><span class="weather-temp">${temp}</span>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
   })
+}
+
+/** True when the forecast expects any precipitation over the hour. */
+function isRaining(forecast: Forecast): boolean {
+  return forecast.precipitationMm > 0
+}
+
+function formatTime(time: string): string {
+  return new Date(time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatTemperature(celsius: number): string {
+  // met.no gives a temperature for every hourly step, but guard the missing case
+  // (NaN from the API) so a marker never renders "NaN°".
+  return Number.isFinite(celsius) ? `${Math.round(celsius)}°` : '–'
+}
+
+function formatMm(mm: number): string {
+  return `${mm.toFixed(1)} mm`
+}
+
+function formatPrecipitation(mm: number): string {
+  return mm > 0 ? `Precipitation: ${formatMm(mm)}` : 'No precipitation'
+}
+
+/**
+ * Maps a MET Norway symbol code (e.g. `lightrainshowers_day`) to an emoji. The
+ * day/night/polartwilight suffix is irrelevant here, so we match on the substrings
+ * that carry the condition, most specific first.
+ */
+function weatherEmoji(symbolCode: string): string {
+  const code = symbolCode.toLowerCase()
+  if (code.includes('thunder')) return '⛈️'
+  if (code.includes('snow')) return '❄️'
+  if (code.includes('sleet')) return '🌨️'
+  if (code.includes('rainshowers')) return '🌦️'
+  if (code.includes('rain')) return '🌧️'
+  if (code.includes('fog')) return '🌫️'
+  if (code.includes('cloudy')) return code.includes('partly') ? '⛅' : '☁️'
+  if (code.includes('fair')) return '🌤️'
+  if (code.includes('clearsky')) return '☀️'
+  return '🌡️'
 }

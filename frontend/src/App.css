@@ -1,7 +1,13 @@
 .app {
-  position: relative;
+  display: flex;
   height: 100vh;
   width: 100vw;
+}
+
+.map-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
 }
 
 .map {
@@ -58,27 +64,103 @@
   background: #fff;
 }
 
-/* ETA marker: a small dot on the route with the arrival time beside it. */
-.eta-dot {
-  display: block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  background: #0969da;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+/* Weather marker: the symbol over the temperature, sitting on the route. */
+.weather {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+  text-align: center;
 }
 
-.eta-label {
-  position: absolute;
-  left: 15px;
-  top: -3px;
-  white-space: nowrap;
-  padding: 1px 5px;
-  border-radius: 5px;
+.weather-symbol {
+  font-size: 20px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+.weather-temp {
+  margin-top: 1px;
+  padding: 0 3px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   font: bold 11px/1.4 system-ui, sans-serif;
+  color: #1f2328;
+}
+
+/* Timeline: the scannable column of samples beside the map. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  flex-shrink: 0;
+  padding: 1rem;
+  border-left: 1px solid #d0d7de;
+  background: #fff;
+  overflow-y: auto;
+  font: 14px/1.3 system-ui, sans-serif;
+  color: #1f2328;
+}
+
+.timeline h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.timeline-empty {
+  margin: 0;
+  color: #57606a;
+}
+
+.timeline-list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: auto 1.5rem auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.25rem;
+  border-bottom: 1px solid #eaeef2;
+}
+
+.timeline-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.timeline-symbol {
+  font-size: 1.1rem;
+  text-align: center;
+}
+
+.timeline-temp {
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-rain {
+  justify-self: end;
+  color: #57606a;
+}
+
+.timeline-rain.is-raining {
+  color: #0969da;
+  font-weight: 600;
+}
+
+.attribution {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #d0d7de;
+  font-size: 12px;
+  color: #57606a;
+}
+
+.attribution a {
   color: #0969da;
 }
 

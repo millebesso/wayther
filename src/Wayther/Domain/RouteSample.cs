@@ -2,8 +2,8 @@ namespace Wayther.Domain;
 
 /// <summary>
 /// One point on the journey: where the traveller is expected to be
-/// (<paramref name="Position"/>) and when they are expected to be there
-/// (<paramref name="Time"/>). The forecast for this place-and-time is attached in
-/// a later slice; here a sample is just <c>(lat, lon, time)</c>.
+/// (<paramref name="Position"/>), when they are expected to be there
+/// (<paramref name="Time"/>), and the nearest-hour <paramref name="Forecast"/>
+/// selected for that place-and-time.
 /// </summary>
-public sealed record RouteSample(Coordinate Position, DateTimeOffset Time);
+public sealed record RouteSample(Coordinate Position, DateTimeOffset Time, WeatherForecast Forecast);

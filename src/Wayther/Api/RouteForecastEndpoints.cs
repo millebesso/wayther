@@ -10,9 +10,9 @@ public static class RouteForecastEndpoints
     public static void MapRouteForecastEndpoints(this WebApplication app)
     {
         // Turn the two map-clicked points plus a departure time and sampling
-        // interval into a drawn route and the timed samples along it: the origin at
-        // departure, a sample every N minutes of travel, and the arrival. A later
-        // slice attaches a forecast to each sample.
+        // interval into a drawn route and the timed, forecasted samples along it:
+        // the origin at departure, a sample every N minutes of travel, and the
+        // arrival — each carrying its nearest-hour forecast.
         app.MapPost("/api/route-forecast", async (
             RouteForecastRequest request,
             RouteForecastService routeForecast,
@@ -34,7 +34,14 @@ public static class RouteForecastEndpoints
                 .ToArray();
 
             var samples = forecast.Samples
-                .Select(sample => new SampleDto(sample.Position.Latitude, sample.Position.Longitude, sample.Time))
+                .Select(sample => new SampleDto(
+                    sample.Position.Latitude,
+                    sample.Position.Longitude,
+                    sample.Time,
+                    new ForecastDto(
+                        sample.Forecast.SymbolCode,
+                        sample.Forecast.TemperatureCelsius,
+                        sample.Forecast.PrecipitationMm)))
                 .ToArray();
 
             return Results.Ok(new RouteForecastResponse(geometry, samples));
@@ -55,8 +62,11 @@ public sealed record RouteForecastRequest(
 /// <summary>A geographic point in the API's wire format (decimal degrees).</summary>
 public sealed record PointDto(double Lat, double Lon);
 
-/// <summary>One timed sample: where the traveller will be and when.</summary>
-public sealed record SampleDto(double Lat, double Lon, DateTimeOffset Time);
+/// <summary>One timed sample: where the traveller will be, when, and the forecast there.</summary>
+public sealed record SampleDto(double Lat, double Lon, DateTimeOffset Time, ForecastDto Forecast);
+
+/// <summary>The nearest-hour forecast for a sample: symbol code, temperature (°C), precipitation (mm).</summary>
+public sealed record ForecastDto(string SymbolCode, double TemperatureCelsius, double PrecipitationMm);
 
 /// <summary>The drawn route geometry plus the ordered timed samples along it.</summary>
 public sealed record RouteForecastResponse(

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Wayther.Api;
 using Wayther.Domain;
 using Wayther.Infrastructure;
+using Wayther.Infrastructure.MetNo;
 using Wayther.Infrastructure.OpenRouteService;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,9 +32,19 @@ builder.Services.AddHttpClient<IRoutingProvider, OpenRouteServiceRoutingProvider
     http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", options.ApiKey);
 });
 
-// Weather is not wired until the weather slice; the placeholder lets the
-// orchestrator resolve from DI without it (the seam is never called this slice).
-builder.Services.AddScoped<IWeatherProvider, PendingWeatherProvider>();
+// MET Norway weather. Non-secret settings come from configuration; the required
+// identifying User-Agent (with contact info) is injected from the git-ignored
+// .env as METNO_USER_AGENT.
+builder.Services.Configure<MetNoOptions>(
+    builder.Configuration.GetSection(MetNoOptions.SectionName));
+builder.Services.PostConfigure<MetNoOptions>(options =>
+    options.UserAgent = builder.Configuration["METNO_USER_AGENT"] ?? options.UserAgent);
+
+builder.Services.AddHttpClient<IWeatherProvider, MetNoWeatherProvider>((sp, http) =>
+{
+    var options = sp.GetRequiredService<IOptions<MetNoOptions>>().Value;
+    http.BaseAddress = new Uri(options.BaseUrl);
+});
 
 // The pure-Domain orchestrator that turns the route into timed samples.
 builder.Services.AddScoped<RouteForecastService>();

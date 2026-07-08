@@ -10,8 +10,9 @@ public sealed record RouteForecast(Route Route, IReadOnlyList<RouteSample> Sampl
 
 /// <summary>
 /// The pure-Domain orchestrator. Given the two endpoints, a departure time and a
-/// sampling interval it resolves the route (via <see cref="IRoutingProvider"/>)
-/// and works out where the traveller will be, and when, at each interval along it.
+/// sampling interval it resolves the route (via <see cref="IRoutingProvider"/>),
+/// works out where the traveller will be and when at each interval along it, and
+/// attaches the nearest-hour forecast (via <see cref="IWeatherProvider"/>) to each.
 /// Depends only on the two provider seams so it can be unit-tested with faked
 /// providers and no network.
 /// </summary>
@@ -19,12 +20,16 @@ public sealed record RouteForecast(Route Route, IReadOnlyList<RouteSample> Sampl
 /// Position-at-time is interpolated over the route geometry using the cumulative
 /// per-segment durations ORS annotates the route with — so a leg driven slowly
 /// consumes more of the clock than an equally-long leg driven fast, rather than
-/// assuming one constant speed for the whole trip. The <see cref="IWeatherProvider"/>
-/// seam is wired in ready for the next slice, which attaches a forecast to each
-/// sample; this slice produces the samples only.
+/// assuming one constant speed for the whole trip. For each sample the coordinate
+/// is rounded to 4 decimal places before querying met.no (met.no requests this; it
+/// also improves cache hit rate), and the timeline's nearest-hour entry to the
+/// sample's arrival time is chosen — no temporal interpolation.
 /// </remarks>
 public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvider weather)
 {
+    // met.no asks callers to round coordinates to ≤4 decimal places (~11 m).
+    private const int CoordinateDecimals = 4;
+
     public async Task<RouteForecast> GetRouteForecastAsync(
         Coordinate origin,
         Coordinate destination,
@@ -35,43 +40,74 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
         if (interval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(interval), interval, "Interval must be positive.");
 
-        // The weather seam is intentionally not consumed yet; see class remarks.
-        _ = weather;
-
         var route = await routing.GetRouteAsync(origin, destination, cancellationToken);
-        var samples = SampleRoute(route, departureTime, interval);
+
+        var samples = new List<RouteSample>();
+        foreach (var (position, time) in SampleRoute(route, departureTime, interval))
+        {
+            // Fetches are direct and sequential in this slice (the cache lands later).
+            var timeline = await weather.GetForecastAsync(Round(position), cancellationToken);
+            samples.Add(new RouteSample(position, time, NearestHour(timeline, time)));
+        }
+
         return new RouteForecast(route, samples);
     }
 
     /// <summary>
-    /// Produces a sample at the origin@departure, then one every <paramref name="interval"/>
-    /// of travel time, and always the arrival point as the final sample — even when
-    /// the arrival does not fall on an interval boundary.
+    /// Produces a timed position at the origin@departure, then one every
+    /// <paramref name="interval"/> of travel time, and always the arrival point as
+    /// the final one — even when the arrival does not fall on an interval boundary.
     /// </summary>
-    private static IReadOnlyList<RouteSample> SampleRoute(
+    private static IEnumerable<(Coordinate Position, DateTimeOffset Time)> SampleRoute(
         Route route,
         DateTimeOffset departureTime,
         TimeSpan interval)
     {
         var geometry = route.Geometry;
         if (geometry.Count == 0)
-            return [];
+            yield break;
 
         var vertexTimes = CumulativeVertexTimes(route);
         var totalTravelSeconds = vertexTimes[^1];
         var intervalSeconds = interval.TotalSeconds;
 
-        var samples = new List<RouteSample>();
         for (var elapsed = 0.0; elapsed < totalTravelSeconds; elapsed += intervalSeconds)
         {
             var position = PositionAt(elapsed, geometry, vertexTimes, totalTravelSeconds);
-            samples.Add(new RouteSample(position, departureTime.AddSeconds(elapsed)));
+            yield return (position, departureTime.AddSeconds(elapsed));
         }
 
         // The arrival is always the final sample, regardless of where the interval landed.
-        samples.Add(new RouteSample(geometry[^1], departureTime.AddSeconds(totalTravelSeconds)));
-        return samples;
+        yield return (geometry[^1], departureTime.AddSeconds(totalTravelSeconds));
     }
+
+    /// <summary>
+    /// Selects the timeline entry whose hour is nearest the sample's arrival time —
+    /// no interpolation. On an exact tie the earlier hour wins.
+    /// </summary>
+    private static WeatherForecast NearestHour(WeatherTimeline timeline, DateTimeOffset time)
+    {
+        if (timeline.Hours.Count == 0)
+            throw new InvalidOperationException("Weather timeline contained no hourly entries.");
+
+        var nearest = timeline.Hours[0];
+        var nearestDelta = (nearest.Time - time).Duration();
+        foreach (var hour in timeline.Hours)
+        {
+            var delta = (hour.Time - time).Duration();
+            if (delta < nearestDelta)
+            {
+                nearest = hour;
+                nearestDelta = delta;
+            }
+        }
+
+        return nearest.Forecast;
+    }
+
+    private static Coordinate Round(Coordinate c) => new(
+        Math.Round(c.Latitude, CoordinateDecimals, MidpointRounding.AwayFromZero),
+        Math.Round(c.Longitude, CoordinateDecimals, MidpointRounding.AwayFromZero));
 
     /// <summary>
     /// The cumulative travel time (seconds) at each geometry vertex. Each route
