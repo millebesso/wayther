@@ -24,7 +24,10 @@ app.MapHealthEndpoints();
 
 // SPA fallback: serve the React index.html for any non-file route that isn't
 // under /api, so unmatched API paths return 404 instead of the HTML shell.
-app.MapFallbackToFile("{*path:regex(^(?!api/).*$)}", "index.html");
+// The `nonfile` constraint is required so real static assets (/assets/*.js,
+// /favicon.svg) are not captured here — otherwise routing assigns them this
+// endpoint and UseStaticFiles skips them, serving the HTML shell instead.
+app.MapFallbackToFile("{*path:nonfile:regex(^(?!api/).*$)}", "index.html");
 
 app.Run();
 
