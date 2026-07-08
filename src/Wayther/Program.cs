@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Wayther.Api;
+using Wayther.Domain;
 using Wayther.Infrastructure;
+using Wayther.Infrastructure.OpenRouteService;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +15,20 @@ var connectionString = builder.Configuration.GetConnectionString("Postgres")
 builder.Services.AddDbContext<WaytherDbContext>(options =>
     options.UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure()));
 
+// OpenRouteService routing. Non-secret settings come from configuration; the API
+// key is injected separately from the git-ignored .env as ORS_API_KEY.
+builder.Services.Configure<OpenRouteServiceOptions>(
+    builder.Configuration.GetSection(OpenRouteServiceOptions.SectionName));
+builder.Services.PostConfigure<OpenRouteServiceOptions>(options =>
+    options.ApiKey = builder.Configuration["ORS_API_KEY"] ?? options.ApiKey);
+
+builder.Services.AddHttpClient<IRoutingProvider, OpenRouteServiceRoutingProvider>((sp, http) =>
+{
+    var options = sp.GetRequiredService<IOptions<OpenRouteServiceOptions>>().Value;
+    http.BaseAddress = new Uri(options.BaseUrl);
+    http.DefaultRequestHeaders.Add("Authorization", options.ApiKey);
+});
+
 var app = builder.Build();
 
 // Apply migrations on startup so the containerized Postgres self-provisions.
@@ -21,6 +38,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapHealthEndpoints();
+app.MapRouteForecastEndpoints();
 
 // SPA fallback: serve the React index.html for any non-file route that isn't
 // under /api, so unmatched API paths return 404 instead of the HTML shell.
