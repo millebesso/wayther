@@ -31,6 +31,13 @@ builder.Services.AddHttpClient<IRoutingProvider, OpenRouteServiceRoutingProvider
     http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", options.ApiKey);
 });
 
+// Weather is not wired until the weather slice; the placeholder lets the
+// orchestrator resolve from DI without it (the seam is never called this slice).
+builder.Services.AddScoped<IWeatherProvider, PendingWeatherProvider>();
+
+// The pure-Domain orchestrator that turns the route into timed samples.
+builder.Services.AddScoped<RouteForecastService>();
+
 var app = builder.Build();
 
 // Apply migrations on startup so the containerized Postgres self-provisions.
