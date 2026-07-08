@@ -26,7 +26,9 @@ builder.Services.AddHttpClient<IRoutingProvider, OpenRouteServiceRoutingProvider
 {
     var options = sp.GetRequiredService<IOptions<OpenRouteServiceOptions>>().Value;
     http.BaseAddress = new Uri(options.BaseUrl);
-    http.DefaultRequestHeaders.Add("Authorization", options.ApiKey);
+    // ORS sends the raw API key as the Authorization value (not a "scheme token"
+    // pair), so skip the structured-header validation that rejects it.
+    http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", options.ApiKey);
 });
 
 var app = builder.Build();
