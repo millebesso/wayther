@@ -45,8 +45,9 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
         var samples = new List<RouteSample>();
         foreach (var (position, time) in SampleRoute(route, departureTime, interval))
         {
-            // Fetches are direct and sequential in this slice (the cache lands later).
-            var timeline = await weather.GetForecastAsync(Round(position), cancellationToken);
+            // Fetches are sequential; the IWeatherProvider seam is cache-backed, so
+            // overlapping samples and repeated routes are served without re-hitting met.no.
+            var timeline = await weather.GetForecastAsync(position.Rounded(CoordinateDecimals), cancellationToken);
             samples.Add(new RouteSample(position, time, NearestHour(timeline, time)));
         }
 
@@ -104,10 +105,6 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
 
         return nearest.Forecast;
     }
-
-    private static Coordinate Round(Coordinate c) => new(
-        Math.Round(c.Latitude, CoordinateDecimals, MidpointRounding.AwayFromZero),
-        Math.Round(c.Longitude, CoordinateDecimals, MidpointRounding.AwayFromZero));
 
     /// <summary>
     /// The cumulative travel time (seconds) at each geometry vertex. Each route

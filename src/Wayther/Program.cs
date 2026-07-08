@@ -40,11 +40,20 @@ builder.Services.Configure<MetNoOptions>(
 builder.Services.PostConfigure<MetNoOptions>(options =>
     options.UserAgent = builder.Configuration["METNO_USER_AGENT"] ?? options.UserAgent);
 
-builder.Services.AddHttpClient<IWeatherProvider, MetNoWeatherProvider>((sp, http) =>
+builder.Services.AddHttpClient<MetNoWeatherProvider>((sp, http) =>
 {
     var options = sp.GetRequiredService<IOptions<MetNoOptions>>().Value;
     http.BaseAddress = new Uri(options.BaseUrl);
 });
+
+// Back the met.no fetches with the forecast_cache (1-hour TTL): the Domain resolves
+// weather through this decorator, which serves warm keys from Postgres and only
+// falls through to met.no on a cold or expired key. TimeProvider drives the TTL.
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IWeatherProvider>(sp => new CachingWeatherProvider(
+    sp.GetRequiredService<MetNoWeatherProvider>(),
+    sp.GetRequiredService<WaytherDbContext>(),
+    sp.GetRequiredService<TimeProvider>()));
 
 // The pure-Domain orchestrator that turns the route into timed samples.
 builder.Services.AddScoped<RouteForecastService>();
