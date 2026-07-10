@@ -54,6 +54,13 @@ export default function App() {
     else setDestination(point)
   }
 
+  // Drop both pins and any resolved route/forecast; the effect clears route and
+  // samples once origin becomes null, so this just resets the placed points.
+  function handleClear() {
+    setOrigin(null)
+    setDestination(null)
+  }
+
   return (
     <div className="app">
       <div className="map-pane">
@@ -78,6 +85,9 @@ export default function App() {
               ))}
             </select>
           </label>
+          <button type="button" className="clear-button" onClick={handleClear} disabled={!origin && !destination}>
+            Clear route
+          </button>
         </div>
 
         <MapContainer center={[59.91, 10.75]} zoom={6} className="map">

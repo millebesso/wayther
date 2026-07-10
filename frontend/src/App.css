@@ -64,6 +64,27 @@
   background: #fff;
 }
 
+.clear-button {
+  align-self: flex-end;
+  font: inherit;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #1f2328;
+  cursor: pointer;
+}
+
+.clear-button:hover:not(:disabled) {
+  background: #f6f8fa;
+  border-color: #afb8c1;
+}
+
+.clear-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Weather marker: the symbol over the temperature, sitting on the route. */
 .weather {
   display: flex;
