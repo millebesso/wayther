@@ -19,11 +19,22 @@ export default function App() {
   const [route, setRoute] = useState<LatLngExpression[]>([])
   const [samples, setSamples] = useState<Sample[]>([])
 
-  // Departure options are fixed 30-minute slots across the next ~48 hours — the
-  // window met.no forecasts hourly. Computed once on mount.
-  const departureSlots = useMemo(departureSlotOptions, [])
-  const [departure, setDeparture] = useState(() => departureSlots[0].value)
+  // Departure is chosen as a day and a time of day. Days run from today through a
+  // week ahead; times are 30-minute slots, and for today the past slots are hidden.
+  const dayOptions = useMemo(departureDayOptions, [])
+  const [departureDay, setDepartureDay] = useState(() => dayOptions[0].value)
+  const timeOptions = useMemo(() => timeSlotsForDay(departureDay), [departureDay])
+  const [departureMinutes, setDepartureMinutes] = useState(() => timeOptions[0]?.value ?? 0)
+  const departure = useMemo(() => combineDayAndTime(departureDay, departureMinutes), [departureDay, departureMinutes])
   const [sampleInterval, setSampleInterval] = useState<Interval>(60)
+
+  // Changing the day changes which times are offered (today drops past slots), so
+  // snap the selected time to the first available slot when it's no longer listed.
+  useEffect(() => {
+    if (!timeOptions.some((slot) => slot.value === departureMinutes)) {
+      setDepartureMinutes(timeOptions[0]?.value ?? 0)
+    }
+  }, [timeOptions, departureMinutes])
 
   // Whenever the inputs are complete, resolve the route and its timed samples.
   useEffect(() => {
@@ -64,32 +75,6 @@ export default function App() {
   return (
     <div className="app">
       <div className="map-pane">
-        <div className="controls">
-          <label className="control">
-            <span>Departure</span>
-            <select value={departure} onChange={(e) => setDeparture(e.target.value)}>
-              {departureSlots.map((slot) => (
-                <option key={slot.value} value={slot.value}>
-                  {slot.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control">
-            <span>Sample every</span>
-            <select value={sampleInterval} onChange={(e) => setSampleInterval(Number(e.target.value) as Interval)}>
-              {INTERVAL_OPTIONS.map((minutes) => (
-                <option key={minutes} value={minutes}>
-                  {minutes} min
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="clear-button" onClick={handleClear} disabled={!origin && !destination}>
-            Clear route
-          </button>
-        </div>
-
         <MapContainer center={[59.91, 10.75]} zoom={6} className="map">
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -116,6 +101,41 @@ export default function App() {
 
       <aside className="timeline">
         <h1>Weather along the way</h1>
+        <div className="controls">
+          <label className="control">
+            <span>Day</span>
+            <select value={departureDay} onChange={(e) => setDepartureDay(e.target.value)}>
+              {dayOptions.map((day) => (
+                <option key={day.value} value={day.value}>
+                  {day.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control">
+            <span>Departure time</span>
+            <select value={departureMinutes} onChange={(e) => setDepartureMinutes(Number(e.target.value))}>
+              {timeOptions.map((slot) => (
+                <option key={slot.value} value={slot.value}>
+                  {slot.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control">
+            <span>Sample every</span>
+            <select value={sampleInterval} onChange={(e) => setSampleInterval(Number(e.target.value) as Interval)}>
+              {INTERVAL_OPTIONS.map((minutes) => (
+                <option key={minutes} value={minutes}>
+                  {minutes} min
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="clear-button" onClick={handleClear} disabled={!origin && !destination}>
+            Clear route
+          </button>
+        </div>
         {samples.length === 0 ? (
           <p className="timeline-empty">Pick a start and destination to see the forecast along your route.</p>
         ) : (
@@ -196,20 +216,55 @@ async function fetchRouteForecast(
   return response.json()
 }
 
-/** 30-minute departure slots from the next slot through the next ~48 hours. */
-function departureSlotOptions(): { value: string; label: string }[] {
-  const slots: { value: string; label: string }[] = []
-  const start = nextHalfHour(new Date())
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-  for (let i = 0; i < 48 * 2; i++) {
-    const slot = new Date(start.getTime() + i * 30 * 60 * 1000)
-    slots.push({ value: slot.toISOString(), label: formatter.format(slot) })
+/** Today through a week ahead, keyed by local date (`YYYY-MM-DD`). */
+function departureDayOptions(): { value: string; label: string }[] {
+  const formatter = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
+  const today = new Date()
+  const days: { value: string; label: string }[] = []
+  for (let i = 0; i < 8; i++) {
+    const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)
+    const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : formatter.format(day)
+    days.push({ value: localDateKey(day), label })
+  }
+  return days
+}
+
+/**
+ * 30-minute time-of-day slots (value = minutes since midnight). For today the
+ * slots already in the past are dropped so the earliest choice is the next one.
+ */
+function timeSlotsForDay(dayKey: string): { value: number; label: string }[] {
+  const next = nextHalfHour(new Date())
+  // If "today" has rolled past its last slot, the next one lands tomorrow.
+  const earliest = dayKey === localDateKey(new Date()) && localDateKey(next) === dayKey ? minutesOfDay(next) : 0
+  const slots: { value: number; label: string }[] = []
+  for (let minutes = earliest; minutes < 24 * 60; minutes += 30) {
+    slots.push({ value: minutes, label: formatMinutes(minutes) })
   }
   return slots
+}
+
+/** Combine a day key and minutes-since-midnight into an absolute ISO timestamp. */
+function combineDayAndTime(dayKey: string, minutes: number): string {
+  const [year, month, day] = dayKey.split('-').map(Number)
+  return new Date(year, month - 1, day, 0, minutes).toISOString()
+}
+
+/** Local calendar date as `YYYY-MM-DD` (avoids UTC shifting the day). */
+function localDateKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+function minutesOfDay(date: Date): number {
+  return date.getHours() * 60 + date.getMinutes()
+}
+
+function formatMinutes(minutes: number): string {
+  const hour = String(Math.floor(minutes / 60)).padStart(2, '0')
+  const minute = String(minutes % 60).padStart(2, '0')
+  return `${hour}:${minute}`
 }
 
 /** The next :00 or :30 boundary at or after `from`. */
