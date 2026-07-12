@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Options;
 using Wayther.Domain;
@@ -37,6 +38,19 @@ public sealed class OpenRouteServiceRoutingProvider(
 
         var path = $"/v2/directions/{_options.Profile}/geojson";
         using var response = await http.PostAsJsonAsync(path, request, cancellationToken);
+
+        // ORS answers an unroutable request (a point in water or off the road
+        // network) with a 404 error envelope. Translate that one status into the
+        // domain's RouteNotFoundException; every other non-success (bad input,
+        // auth, quota, outage) stays a generic failure via EnsureSuccessStatusCode.
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var error = await response.Content
+                .ReadFromJsonAsync<OrsErrorResponse>(cancellationToken);
+            throw new RouteNotFoundException(
+                error?.Error?.Message ?? "OpenRouteService could not find a route between the points.");
+        }
+
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadFromJsonAsync<OrsDirectionsResponse>(cancellationToken)

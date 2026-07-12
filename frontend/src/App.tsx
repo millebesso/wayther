@@ -7,6 +7,26 @@ type Point = { lat: number; lon: number }
 type Forecast = { symbolCode: string; temperatureCelsius: number; precipitationMm: number }
 type Sample = { lat: number; lon: number; time: string; forecast: Forecast }
 
+// The backend's 422 discriminator plus a catch-all for anything else that fails.
+type ForecastError = 'route_not_found' | 'forecast_unavailable' | 'generic'
+
+/** User-facing copy for each failure, shown in the timeline pane. */
+const ERROR_MESSAGES: Record<ForecastError, string> = {
+  route_not_found: 'No route found. Try placing your points on or near a road — not in water or off-grid.',
+  forecast_unavailable: 'No forecast reaches that far ahead yet. Try an earlier departure time.',
+  generic: 'Something went wrong fetching your forecast. Please try again.',
+}
+
+/** Carries which failure occurred so the effect can pick the right message. */
+class RouteForecastRequestError extends Error {
+  readonly code: ForecastError
+  constructor(code: ForecastError) {
+    super(code)
+    this.name = 'RouteForecastRequestError'
+    this.code = code
+  }
+}
+
 const originIcon = makePinIcon('A', '#1a7f37')
 const destinationIcon = makePinIcon('B', '#cf222e')
 
@@ -18,6 +38,7 @@ export default function App() {
   const [destination, setDestination] = useState<Point | null>(null)
   const [route, setRoute] = useState<LatLngExpression[]>([])
   const [samples, setSamples] = useState<Sample[]>([])
+  const [error, setError] = useState<ForecastError | null>(null)
 
   // Departure is chosen as a day and a time of day. Days run from today through a
   // week ahead; times are 30-minute slots, and for today the past slots are hidden.
@@ -41,6 +62,7 @@ export default function App() {
     if (!origin || !destination) {
       setRoute([])
       setSamples([])
+      setError(null)
       return
     }
 
@@ -49,9 +71,15 @@ export default function App() {
       .then((result) => {
         setRoute(result.geometry.map((p) => [p.lat, p.lon]))
         setSamples(result.samples)
+        setError(null)
       })
-      .catch((error) => {
-        if (error.name !== 'AbortError') console.error('Route forecast request failed', error)
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        // Clear any stale route/samples so the map never shows a prior success,
+        // then surface the failure (pins are left in place for the user to adjust).
+        setRoute([])
+        setSamples([])
+        setError(err instanceof RouteForecastRequestError ? err.code : 'generic')
       })
     return () => controller.abort()
   }, [origin, destination, departure, sampleInterval])
@@ -136,7 +164,9 @@ export default function App() {
             Clear route
           </button>
         </div>
-        {samples.length === 0 ? (
+        {error ? (
+          <p className="timeline-error">{ERROR_MESSAGES[error]}</p>
+        ) : samples.length === 0 ? (
           <p className="timeline-empty">Pick a start and destination to see the forecast along your route.</p>
         ) : (
           <ol className="timeline-list">
@@ -212,16 +242,35 @@ async function fetchRouteForecast(
     }),
     signal,
   })
-  if (!response.ok) throw new Error(`route-forecast returned ${response.status}`)
+  if (!response.ok) throw new RouteForecastRequestError(await errorCode(response))
   return response.json()
 }
 
-/** Today through a week ahead, keyed by local date (`YYYY-MM-DD`). */
+/**
+ * Reads the failure kind from a non-OK response. A 422 carries the backend's
+ * `{ error }` discriminator; anything else (500, and a network error never gets
+ * here) is treated as a generic failure.
+ */
+async function errorCode(response: Response): Promise<ForecastError> {
+  try {
+    const body = await response.json()
+    if (body?.error === 'route_not_found' || body?.error === 'forecast_unavailable') return body.error
+  } catch {
+    // Non-JSON or empty body — fall through to the generic message.
+  }
+  return 'generic'
+}
+
+/**
+ * Today through three days ahead, keyed by local date (`YYYY-MM-DD`). Capped to
+ * met.no's hourly window: past ~3 days there's no hourly forecast to attach, so
+ * offering those days would only lead into the "no forecast" error.
+ */
 function departureDayOptions(): { value: string; label: string }[] {
   const formatter = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
   const today = new Date()
   const days: { value: string; label: string }[] = []
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 4; i++) {
     const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)
     const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : formatter.format(day)
     days.push({ value: localDateKey(day), label })

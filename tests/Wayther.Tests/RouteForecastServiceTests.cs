@@ -243,6 +243,28 @@ public class RouteForecastServiceTests
             service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.Zero));
     }
 
+    [Fact]
+    public async Task Sample_past_the_hourly_window_reports_no_forecast()
+    {
+        // The timeline only covers 4 hours from departure, but this route takes 6h,
+        // so its later samples fall more than an hour past the last hourly entry.
+        var service = CreateService(SingleSegmentRoute(durationSeconds: 6 * 3600, end: Destination));
+
+        await Assert.ThrowsAsync<ForecastUnavailableException>(() =>
+            service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.FromMinutes(60)));
+    }
+
+    [Fact]
+    public async Task Empty_timeline_reports_no_forecast()
+    {
+        var service = new RouteForecastService(
+            new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 3600, end: Destination)),
+            new FakeWeatherProvider(new WeatherTimeline([])));
+
+        await Assert.ThrowsAsync<ForecastUnavailableException>(() =>
+            service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.FromMinutes(60)));
+    }
+
     private static RouteForecastService CreateService(Route route) =>
         new(new FakeRoutingProvider(route), new FakeWeatherProvider(HourlyTimeline(Departure, hours: 4)));
 

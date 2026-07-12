@@ -30,6 +30,12 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
     // met.no asks callers to round coordinates to ≤4 decimal places (~11 m).
     private const int CoordinateDecimals = 4;
 
+    // How far the nearest hourly entry may sit from a sample's time before we treat
+    // the point-in-time as uncovered. Inside met.no's hourly window the nearest hour
+    // is always ≤30 min away; past the window's edge the gap jumps to hours, so 1h
+    // cleanly separates "covered" from "beyond the hourly window."
+    private static readonly TimeSpan MaxForecastDistance = TimeSpan.FromHours(1);
+
     public async Task<RouteForecast> GetRouteForecastAsync(
         Coordinate origin,
         Coordinate destination,
@@ -84,12 +90,16 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
 
     /// <summary>
     /// Selects the timeline entry whose hour is nearest the sample's arrival time —
-    /// no interpolation. On an exact tie the earlier hour wins.
+    /// no interpolation. On an exact tie the earlier hour wins. Throws
+    /// <see cref="ForecastUnavailableException"/> when nothing covers the time: an
+    /// empty timeline, or a nearest hour further than <see cref="MaxForecastDistance"/>
+    /// away (the sample falls past met.no's hourly window, so the closest hour would
+    /// be a stale guess rather than a real forecast).
     /// </summary>
     private static WeatherForecast NearestHour(WeatherTimeline timeline, DateTimeOffset time)
     {
         if (timeline.Hours.Count == 0)
-            throw new InvalidOperationException("Weather timeline contained no hourly entries.");
+            throw new ForecastUnavailableException("No hourly forecast is available for the requested time.");
 
         var nearest = timeline.Hours[0];
         var nearestDelta = (nearest.Time - time).Duration();
@@ -102,6 +112,9 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
                 nearestDelta = delta;
             }
         }
+
+        if (nearestDelta > MaxForecastDistance)
+            throw new ForecastUnavailableException("No hourly forecast reaches the requested departure time.");
 
         return nearest.Forecast;
     }

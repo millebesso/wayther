@@ -35,3 +35,13 @@ internal sealed record OrsStep(
 internal sealed record OrsSummary(
     [property: JsonPropertyName("distance")] double Distance,
     [property: JsonPropertyName("duration")] double Duration);
+
+// ORS reports an unroutable request as an HTTP 404 carrying this error envelope
+// (e.g. code 2010 "Could not find routable point…", 2009 "Route could not be
+// found…"). Only the message is kept, for the server log.
+internal sealed record OrsErrorResponse(
+    [property: JsonPropertyName("error")] OrsError? Error);
+
+internal sealed record OrsError(
+    [property: JsonPropertyName("code")] int Code,
+    [property: JsonPropertyName("message")] string? Message);

@@ -39,10 +39,35 @@ public static class RouteForecastEndpoints
                     TimeSpan.FromMinutes(request.IntervalMinutes),
                     cancellationToken);
             }
+            catch (RouteNotFoundException ex)
+            {
+                // Expected, user-correctable outcome: no route between the points.
+                // Log the provider's reason (never shown to the user) and return a
+                // 422 the frontend maps to its own "no route" copy.
+                logger.LogWarning(
+                    "Route forecast has no route: {OriginLat},{OriginLon} -> {DestLat},{DestLon}: {Reason}",
+                    request.Origin.Lat, request.Origin.Lon,
+                    request.Destination.Lat, request.Destination.Lon, ex.Message);
+                return Results.UnprocessableEntity(
+                    new RouteForecastError("route_not_found", ex.Message));
+            }
+            catch (ForecastUnavailableException ex)
+            {
+                // Expected, user-correctable outcome: the departure sits past met.no's
+                // hourly window. 422 with the forecast_unavailable discriminator.
+                logger.LogWarning(
+                    "Route forecast has no forecast: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                    "departing {DepartureTime:o}: {Reason}",
+                    request.Origin.Lat, request.Origin.Lon,
+                    request.Destination.Lat, request.Destination.Lon,
+                    request.DepartureTime, ex.Message);
+                return Results.UnprocessableEntity(
+                    new RouteForecastError("forecast_unavailable", ex.Message));
+            }
             catch (Exception ex)
             {
-                // Surface the failed route request with its inputs, then rethrow so
-                // the framework still produces its normal error response.
+                // Unexpected failure: surface it with its inputs, then rethrow so the
+                // framework still produces its normal error response (a 500).
                 logger.LogError(ex,
                     "Route forecast failed: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
                     "departing {DepartureTime:o} every {IntervalMinutes}min",
@@ -106,3 +131,11 @@ public sealed record ForecastDto(string SymbolCode, double TemperatureCelsius, d
 public sealed record RouteForecastResponse(
     IReadOnlyList<PointDto> Geometry,
     IReadOnlyList<SampleDto> Samples);
+
+/// <summary>
+/// A 422 error body for an expected, user-correctable failure. <see cref="Error"/>
+/// is the stable discriminator the frontend branches on to pick its own copy
+/// (<c>route_not_found</c> / <c>forecast_unavailable</c>); <see cref="Message"/> is
+/// a diagnostic detail, not shown to the user.
+/// </summary>
+public sealed record RouteForecastError(string Error, string Message);
