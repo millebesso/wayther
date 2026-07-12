@@ -9,6 +9,13 @@ public static class RouteForecastEndpoints
 
     public static void MapRouteForecastEndpoints(this WebApplication app)
     {
+        // A stable, named logger for usage tracking. RouteForecastEndpoints is a
+        // static class (so it can't be an ILogger<T> category), so name the category
+        // explicitly here and close over the logger in the handler.
+        var logger = app.Services
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Wayther.RouteForecast");
+
         // Turn the two map-clicked points plus a departure time and sampling
         // interval into a drawn route and the timed, forecasted samples along it:
         // the origin at departure, a sample every N minutes of travel, and the
@@ -22,12 +29,39 @@ public static class RouteForecastEndpoints
                 return Results.BadRequest(
                     $"intervalMinutes must be one of {string.Join(", ", AllowedIntervalMinutes)}.");
 
-            var forecast = await routeForecast.GetRouteForecastAsync(
-                new Coordinate(request.Origin.Lat, request.Origin.Lon),
-                new Coordinate(request.Destination.Lat, request.Destination.Lon),
-                request.DepartureTime,
-                TimeSpan.FromMinutes(request.IntervalMinutes),
-                cancellationToken);
+            RouteForecast forecast;
+            try
+            {
+                forecast = await routeForecast.GetRouteForecastAsync(
+                    new Coordinate(request.Origin.Lat, request.Origin.Lon),
+                    new Coordinate(request.Destination.Lat, request.Destination.Lon),
+                    request.DepartureTime,
+                    TimeSpan.FromMinutes(request.IntervalMinutes),
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Surface the failed route request with its inputs, then rethrow so
+                // the framework still produces its normal error response.
+                logger.LogError(ex,
+                    "Route forecast failed: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                    "departing {DepartureTime:o} every {IntervalMinutes}min",
+                    request.Origin.Lat, request.Origin.Lon,
+                    request.Destination.Lat, request.Destination.Lon,
+                    request.DepartureTime, request.IntervalMinutes);
+                throw;
+            }
+
+            logger.LogInformation(
+                "Route forecast requested: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                "departing {DepartureTime:o} every {IntervalMinutes}min; " +
+                "route {DistanceKm:F1}km/{DurationMin:F0}min, {SampleCount} samples",
+                request.Origin.Lat, request.Origin.Lon,
+                request.Destination.Lat, request.Destination.Lon,
+                request.DepartureTime, request.IntervalMinutes,
+                forecast.Route.TotalDistanceMeters / 1000.0,
+                forecast.Route.TotalDurationSeconds / 60.0,
+                forecast.Samples.Count);
 
             var geometry = forecast.Route.Geometry
                 .Select(point => new PointDto(point.Latitude, point.Longitude))
