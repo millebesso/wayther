@@ -1,6 +1,7 @@
 .app {
   display: flex;
-  height: 100vh;
+  height: 100vh; /* fallback for browsers without dvh */
+  height: 100dvh;
   width: 100vw;
 }
 
@@ -192,4 +193,80 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   color: #fff;
   font: bold 14px/1 system-ui, sans-serif;
+}
+
+/*
+ * Portrait phones: the map and timeline can't sit side-by-side, so stack them —
+ * map on top, timeline below. Both panes stay on screen (no page scroll); only
+ * the forecast list scrolls inside its own pane so the controls and attribution
+ * stay put.
+ */
+@media (max-width: 640px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .map-pane {
+    flex: none;
+    height: 55dvh;
+  }
+
+  .timeline {
+    width: 100%;
+    height: 45dvh;
+    flex-shrink: 0;
+    border-left: none;
+    border-top: 1px solid #d0d7de;
+    overflow-y: hidden;
+  }
+
+  .timeline-list {
+    /* min-height:0 lets a flex child shrink below its content and scroll. */
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+/*
+ * Short viewports (landscape phones): these stay side-by-side because they're
+ * wider than 640px, but they're only ~350–400px tall, so the sidebar has no
+ * room. Compact the controls into a wrapping row and trim the chrome to give
+ * the forecast list and footer somewhere to live.
+ */
+@media (max-height: 500px) {
+  .hint {
+    display: none;
+  }
+
+  .timeline {
+    padding: 0.6rem;
+    overflow-y: hidden;
+  }
+
+  .timeline h1 {
+    margin: 0 0 0.4rem;
+    font-size: 0.9rem;
+  }
+
+  .controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.4rem 0.6rem;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.6rem;
+  }
+
+  .control {
+    flex: 1 1 auto;
+  }
+
+  .clear-button {
+    align-self: auto;
+  }
+
+  .timeline-list {
+    min-height: 0;
+    overflow-y: auto;
+  }
 }
