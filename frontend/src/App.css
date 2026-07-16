@@ -82,6 +82,26 @@
   cursor: default;
 }
 
+/* The "Remove stop" action inside a waypoint pin's popup. */
+.remove-waypoint {
+  font: inherit;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #cf222e;
+  cursor: pointer;
+}
+
+.remove-waypoint:hover {
+  background: #f6f8fa;
+  border-color: #afb8c1;
+}
+
+.remove-waypoint-hint {
+  color: #57606a;
+}
+
 /* Weather marker: the symbol over the temperature, sitting on the route. */
 .weather {
   display: flex;

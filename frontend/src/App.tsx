@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMapEvents } from 'react-leaflet'
 import L, { type LatLngExpression } from 'leaflet'
 import './App.css'
@@ -27,15 +27,21 @@ class RouteForecastRequestError extends Error {
   }
 }
 
-const originIcon = makePinIcon('A', '#1a7f37')
-const destinationIcon = makePinIcon('B', '#cf222e')
+const originColor = '#1a7f37'
+const destinationColor = '#cf222e'
+const stopColor = '#57606a'
+
+// A route needs a start and an end; the cap matches the backend's MaxWaypoints and
+// keeps the ORS request and the number of forecast lookups bounded.
+const MAX_WAYPOINTS = 10
 
 const INTERVAL_OPTIONS = [30, 60] as const
 type Interval = (typeof INTERVAL_OPTIONS)[number]
 
 export default function App() {
-  const [origin, setOrigin] = useState<Point | null>(null)
-  const [destination, setDestination] = useState<Point | null>(null)
+  // The ordered list of stops: the first is the start, the last the destination,
+  // any between are intermediate waypoints. Clicking the map appends to the end.
+  const [waypoints, setWaypoints] = useState<Point[]>([])
   const [route, setRoute] = useState<LatLngExpression[]>([])
   const [samples, setSamples] = useState<Sample[]>([])
   const [error, setError] = useState<ForecastError | null>(null)
@@ -57,9 +63,9 @@ export default function App() {
     }
   }, [timeOptions, departureMinutes])
 
-  // Whenever the inputs are complete, resolve the route and its timed samples.
+  // Once there's a start and an end, resolve the route and its timed samples.
   useEffect(() => {
-    if (!origin || !destination) {
+    if (waypoints.length < 2) {
       setRoute([])
       setSamples([])
       setError(null)
@@ -67,7 +73,7 @@ export default function App() {
     }
 
     const controller = new AbortController()
-    fetchRouteForecast({ origin, destination, departure, interval: sampleInterval }, controller.signal)
+    fetchRouteForecast({ waypoints, departure, interval: sampleInterval }, controller.signal)
       .then((result) => {
         setRoute(result.geometry.map((p) => [p.lat, p.lon]))
         setSamples(result.samples)
@@ -82,22 +88,27 @@ export default function App() {
         setError(err instanceof RouteForecastRequestError ? err.code : 'generic')
       })
     return () => controller.abort()
-  }, [origin, destination, departure, sampleInterval])
+  }, [waypoints, departure, sampleInterval])
 
+  // A click adds a new stop at the end of the route; once the cap is reached the
+  // gesture goes inert (the hint tells the user why).
   function handleMapClick(point: Point) {
-    if (!origin) setOrigin(point)
-    else if (!destination) setDestination(point)
-    // Both placed: move whichever pin is nearer the click, so a mistaken point
-    // is corrected in place without resetting the other.
-    else if (isNearer(point, origin, destination)) setOrigin(point)
-    else setDestination(point)
+    setWaypoints((current) => (current.length >= MAX_WAYPOINTS ? current : [...current, point]))
   }
 
-  // Drop both pins and any resolved route/forecast; the effect clears route and
-  // samples once origin becomes null, so this just resets the placed points.
+  function handleMoveWaypoint(index: number, point: Point) {
+    setWaypoints((current) => current.map((wp, i) => (i === index ? point : wp)))
+  }
+
+  // Remove a single stop, but never drop below a start and an end.
+  function handleRemoveWaypoint(index: number) {
+    setWaypoints((current) => (current.length <= 2 ? current : current.filter((_, i) => i !== index)))
+  }
+
+  // Drop all pins and any resolved route/forecast; the effect clears route and
+  // samples once fewer than two remain, so this just empties the list.
   function handleClear() {
-    setOrigin(null)
-    setDestination(null)
+    setWaypoints([])
   }
 
   return (
@@ -109,8 +120,16 @@ export default function App() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <ClickHandler onClick={handleMapClick} />
-          <DraggablePin point={origin} icon={originIcon} onMove={setOrigin} />
-          <DraggablePin point={destination} icon={destinationIcon} onMove={setDestination} />
+          {waypoints.map((point, i) => (
+            <WaypointPin
+              key={i}
+              point={point}
+              icon={waypointIcon(i, waypoints.length)}
+              canRemove={waypoints.length > 2}
+              onMove={(moved) => handleMoveWaypoint(i, moved)}
+              onRemove={() => handleRemoveWaypoint(i)}
+            />
+          ))}
           {route.length > 0 && <Polyline positions={route} color="#0969da" weight={5} />}
           {samples.map((sample, i) => (
             <Marker key={i} position={[sample.lat, sample.lon]} icon={weatherIcon(sample.forecast)}>
@@ -124,7 +143,7 @@ export default function App() {
             </Marker>
           ))}
         </MapContainer>
-        <p className="hint">{hintFor(origin, destination)}</p>
+        <p className="hint">{hintFor(waypoints)}</p>
       </div>
 
       <aside className="timeline">
@@ -160,7 +179,7 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button type="button" className="clear-button" onClick={handleClear} disabled={!origin && !destination}>
+          <button type="button" className="clear-button" onClick={handleClear} disabled={waypoints.length === 0}>
             Clear route
           </button>
         </div>
@@ -195,48 +214,106 @@ export default function App() {
 }
 
 function ClickHandler({ onClick }: { onClick: (point: Point) => void }) {
-  useMapEvents({ click: (e) => onClick(toPoint(e.latlng)) })
+  useMapEvents({
+    click: (e) => {
+      // A click inside an open popup (e.g. a pin's "Remove stop" button) bubbles up
+      // to the map as a click too. Ignore those, so managing a pin never also drops
+      // a stray waypoint at the popup's location.
+      if ((e.originalEvent.target as HTMLElement).closest('.leaflet-popup')) return
+      onClick(toPoint(e.latlng))
+    },
+  })
   return null
 }
 
-function DraggablePin({
+function WaypointPin({
   point,
   icon,
+  canRemove,
   onMove,
+  onRemove,
 }: {
-  point: Point | null
+  point: Point
   icon: L.DivIcon
+  canRemove: boolean
   onMove: (point: Point) => void
+  onRemove: () => void
 }) {
-  if (!point) return null
   return (
     <Marker
       position={[point.lat, point.lon]}
       icon={icon}
       draggable
       eventHandlers={{ dragend: (e) => onMove(toPoint(e.target.getLatLng())) }}
-    />
+    >
+      <Popup>
+        {canRemove ? (
+          <RemoveStopButton onRemove={onRemove} />
+        ) : (
+          // A route needs a start and an end, so the last two can't be removed.
+          <span className="remove-waypoint-hint">A route needs a start and an end.</span>
+        )}
+      </Popup>
+    </Marker>
   )
 }
 
-function hintFor(origin: Point | null, destination: Point | null): string {
-  if (!origin) return 'Click the map to set the start point.'
-  if (!destination) return 'Click the map to set the destination.'
-  return 'Click near a pin (or drag it) to move it.'
+/**
+ * The "Remove stop" action inside a pin's popup. Removing a stop unmounts this marker
+ * and its popup, so the click is handled by a native listener that stops propagation
+ * *before* it can bubble to the Leaflet map — whose click handler would otherwise fire
+ * (asynchronously, after the popup is gone) and drop a stray waypoint. React's own
+ * onClick is delegated above the map, so it can't both remove the stop and stop the map.
+ */
+function RemoveStopButton({ onRemove }: { onRemove: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const button = ref.current
+    if (!button) return
+    const handle = (e: MouseEvent) => {
+      e.stopPropagation()
+      onRemove()
+    }
+    button.addEventListener('click', handle)
+    return () => button.removeEventListener('click', handle)
+  }, [onRemove])
+  return (
+    <button type="button" ref={ref} className="remove-waypoint">
+      Remove stop
+    </button>
+  )
+}
+
+function hintFor(waypoints: Point[]): string {
+  if (waypoints.length === 0) return 'Click the map to set the start point.'
+  if (waypoints.length === 1) return 'Click the map to set the destination.'
+  if (waypoints.length >= MAX_WAYPOINTS) return `Maximum of ${MAX_WAYPOINTS} waypoints reached.`
+  return 'Click to add another stop, or drag a pin to move it.'
+}
+
+/**
+ * The pin style for a waypoint at <code>index</code> of <code>total</code>: a green
+ * "A" for the start, a red "B" for the destination, and neutral dots numbered in
+ * visiting order for the stops between. Colours follow position, not identity, so
+ * adding a stop re-labels the old endpoint.
+ */
+function waypointIcon(index: number, total: number): L.DivIcon {
+  if (index === 0) return makePinIcon('A', originColor)
+  if (index === total - 1) return makePinIcon('B', destinationColor)
+  return makePinIcon(String(index), stopColor)
 }
 
 type RouteForecastResult = { geometry: Point[]; samples: Sample[] }
 
 async function fetchRouteForecast(
-  input: { origin: Point; destination: Point; departure: string; interval: Interval },
+  input: { waypoints: Point[]; departure: string; interval: Interval },
   signal: AbortSignal,
 ): Promise<RouteForecastResult> {
   const response = await fetch('/api/route-forecast', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      origin: input.origin,
-      destination: input.destination,
+      waypoints: input.waypoints,
       departureTime: input.departure,
       intervalMinutes: input.interval,
     }),
@@ -324,17 +401,6 @@ function nextHalfHour(from: Date): Date {
   const bump = remainder === 0 ? (slot.getTime() >= from.getTime() ? 0 : 30) : 30 - remainder
   slot.setMinutes(slot.getMinutes() + bump)
   return slot
-}
-
-/** True when `point` is closer to `a` than to `b` (squared degree distance is enough to compare). */
-function isNearer(point: Point, a: Point, b: Point): boolean {
-  return squaredDistance(point, a) <= squaredDistance(point, b)
-}
-
-function squaredDistance(p: Point, q: Point): number {
-  const dLat = p.lat - q.lat
-  const dLon = p.lon - q.lon
-  return dLat * dLat + dLon * dLon
 }
 
 function toPoint(latlng: L.LatLng): Point {

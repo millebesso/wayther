@@ -42,7 +42,7 @@ public class RouteForecastServiceTests
         var service = CreateService(UnevenPaceRoute());
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(30));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(30));
 
         // 0, 30, 60, 90 min of travel, then the 120-min arrival always appended.
         Assert.Equal(5, forecast.Samples.Count);
@@ -61,7 +61,7 @@ public class RouteForecastServiceTests
         var service = CreateService(UnevenPaceRoute());
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(60));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(60));
 
         // 0, 60 min of travel, then the 120-min arrival.
         Assert.Equal(3, forecast.Samples.Count);
@@ -76,7 +76,7 @@ public class RouteForecastServiceTests
         var service = CreateService(UnevenPaceRoute());
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(30));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(30));
 
         AssertCoordinate(new(0, 0), forecast.Samples[0].Position);
         AssertCoordinate(new(0, 10), forecast.Samples[^1].Position);
@@ -88,7 +88,7 @@ public class RouteForecastServiceTests
         var service = CreateService(UnevenPaceRoute());
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(30));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(30));
 
         // 30 min = halfway (by time) through the short first leg → midpoint of it,
         // NOT ~25% of the total distance down the long leg.
@@ -114,7 +114,7 @@ public class RouteForecastServiceTests
         var service = CreateService(route);
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(30));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(30));
 
         // The first leg is ~1/10 of the length, so it takes ~6 min; the 30-min
         // sample is ~24 min into the ~54-min second leg → ~24/54 of the way from 1°
@@ -136,7 +136,7 @@ public class RouteForecastServiceTests
         var service = CreateService(SingleSegmentRoute(durationSeconds: 5400, end: Destination));
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(60));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(60));
 
         Assert.Equal(3, forecast.Samples.Count);
         Assert.Equal(Departure.AddMinutes(60), forecast.Samples[1].Time);
@@ -152,7 +152,7 @@ public class RouteForecastServiceTests
         var service = CreateService(SingleSegmentRoute(durationSeconds: 600, end: end));
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, end, Departure, TimeSpan.FromMinutes(30));
+            [Origin, end], Departure, TimeSpan.FromMinutes(30));
 
         Assert.Equal(2, forecast.Samples.Count);
         AssertCoordinate(new(0, 0), forecast.Samples[0].Position);
@@ -168,7 +168,7 @@ public class RouteForecastServiceTests
         var service = CreateService(route);
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(30));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(30));
 
         Assert.Equal(route.Geometry, forecast.Route.Geometry);
     }
@@ -185,7 +185,7 @@ public class RouteForecastServiceTests
             new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 6000, end: Destination)), weather);
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(40));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(40));
 
         Assert.Collection(
             forecast.Samples.Select(s => s.Forecast.SymbolCode),
@@ -208,7 +208,7 @@ public class RouteForecastServiceTests
             new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 1800, end: Destination)), weather);
 
         var forecast = await service.GetRouteForecastAsync(
-            Origin, Destination, Departure, TimeSpan.FromMinutes(60));
+            [Origin, Destination], Departure, TimeSpan.FromMinutes(60));
 
         Assert.Equal("h09", forecast.Samples[^1].Forecast.SymbolCode);
     }
@@ -223,7 +223,7 @@ public class RouteForecastServiceTests
         var service = new RouteForecastService(
             new FakeRoutingProvider(SingleSegmentRoute(durationSeconds: 600, end: end)), weather);
 
-        await service.GetRouteForecastAsync(Origin, end, Departure, TimeSpan.FromMinutes(30));
+        await service.GetRouteForecastAsync([Origin, end], Departure, TimeSpan.FromMinutes(30));
 
         Assert.All(weather.Queried, c =>
         {
@@ -240,7 +240,7 @@ public class RouteForecastServiceTests
         var service = CreateService(UnevenPaceRoute());
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.Zero));
+            service.GetRouteForecastAsync([Origin, Destination], Departure, TimeSpan.Zero));
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public class RouteForecastServiceTests
         var service = CreateService(SingleSegmentRoute(durationSeconds: 6 * 3600, end: Destination));
 
         await Assert.ThrowsAsync<ForecastUnavailableException>(() =>
-            service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.FromMinutes(60)));
+            service.GetRouteForecastAsync([Origin, Destination], Departure, TimeSpan.FromMinutes(60)));
     }
 
     [Fact]
@@ -262,7 +262,30 @@ public class RouteForecastServiceTests
             new FakeWeatherProvider(new WeatherTimeline([])));
 
         await Assert.ThrowsAsync<ForecastUnavailableException>(() =>
-            service.GetRouteForecastAsync(Origin, Destination, Departure, TimeSpan.FromMinutes(60)));
+            service.GetRouteForecastAsync([Origin, Destination], Departure, TimeSpan.FromMinutes(60)));
+    }
+
+    [Fact]
+    public async Task Forwards_all_waypoints_in_order_to_the_routing_provider()
+    {
+        // Start, one intermediate stop, destination — the service must hand the full
+        // ordered list to the routing provider, not just the endpoints.
+        var routing = new FakeRoutingProvider(UnevenPaceRoute());
+        var service = new RouteForecastService(routing, new FakeWeatherProvider(HourlyTimeline(Departure, hours: 4)));
+        var stop = new Coordinate(0, 5);
+
+        await service.GetRouteForecastAsync([Origin, stop, Destination], Departure, TimeSpan.FromMinutes(60));
+
+        Assert.Equal([Origin, stop, Destination], routing.RequestedWaypoints);
+    }
+
+    [Fact]
+    public async Task Fewer_than_two_waypoints_is_rejected()
+    {
+        var service = CreateService(UnevenPaceRoute());
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.GetRouteForecastAsync([Origin], Departure, TimeSpan.FromMinutes(60)));
     }
 
     private static RouteForecastService CreateService(Route route) =>
@@ -293,9 +316,14 @@ public class RouteForecastServiceTests
 
     private sealed class FakeRoutingProvider(Route route) : IRoutingProvider
     {
+        public IReadOnlyList<Coordinate>? RequestedWaypoints { get; private set; }
+
         public Task<Route> GetRouteAsync(
-            Coordinate origin, Coordinate destination, CancellationToken cancellationToken = default) =>
-            Task.FromResult(route);
+            IReadOnlyList<Coordinate> waypoints, CancellationToken cancellationToken = default)
+        {
+            RequestedWaypoints = waypoints;
+            return Task.FromResult(route);
+        }
     }
 
     private sealed class FakeWeatherProvider(WeatherTimeline timeline) : IWeatherProvider

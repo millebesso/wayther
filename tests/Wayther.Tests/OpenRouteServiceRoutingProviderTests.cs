@@ -49,8 +49,10 @@ public class OpenRouteServiceRoutingProviderTests
         var provider = CreateProvider(handler);
 
         await provider.GetRouteAsync(
+        [
             new Coordinate(Latitude: 59.0, Longitude: 10.0),
-            new Coordinate(Latitude: 60.0, Longitude: 11.0));
+            new Coordinate(Latitude: 60.0, Longitude: 11.0),
+        ]);
 
         Assert.Equal(HttpMethod.Post, handler.Request!.Method);
         Assert.Equal(
@@ -69,13 +71,35 @@ public class OpenRouteServiceRoutingProviderTests
     }
 
     [Fact]
+    public async Task GetRouteAsync_posts_every_waypoint_in_visiting_order()
+    {
+        var handler = new CapturingHandler(CannedGeoJson);
+        var provider = CreateProvider(handler);
+
+        // Start, an intermediate stop, destination — all three must reach ORS as
+        // [lon, lat] pairs, in the order given.
+        await provider.GetRouteAsync(
+        [
+            new Coordinate(Latitude: 59.0, Longitude: 10.0),
+            new Coordinate(Latitude: 59.5, Longitude: 10.5),
+            new Coordinate(Latitude: 60.0, Longitude: 11.0),
+        ]);
+
+        using var body = JsonDocument.Parse(handler.RequestBody!);
+        var coordinates = body.RootElement.GetProperty("coordinates");
+        Assert.Equal(3, coordinates.GetArrayLength());
+        Assert.Equal([10.0, 59.0], [coordinates[0][0].GetDouble(), coordinates[0][1].GetDouble()]);
+        Assert.Equal([10.5, 59.5], [coordinates[1][0].GetDouble(), coordinates[1][1].GetDouble()]);
+        Assert.Equal([11.0, 60.0], [coordinates[2][0].GetDouble(), coordinates[2][1].GetDouble()]);
+    }
+
+    [Fact]
     public async Task GetRouteAsync_maps_geometry_to_lat_lon()
     {
         var provider = CreateProvider(new CapturingHandler(CannedGeoJson));
 
         var route = await provider.GetRouteAsync(
-            new Coordinate(59.0, 10.0),
-            new Coordinate(59.3, 10.3));
+            [new Coordinate(59.0, 10.0), new Coordinate(59.3, 10.3)]);
 
         Assert.Equal(4, route.Geometry.Count);
         // GeoJSON is [lon, lat]; the domain coordinate is lat/lon.
@@ -89,8 +113,7 @@ public class OpenRouteServiceRoutingProviderTests
         var provider = CreateProvider(new CapturingHandler(CannedGeoJson));
 
         var route = await provider.GetRouteAsync(
-            new Coordinate(59.0, 10.0),
-            new Coordinate(59.3, 10.3));
+            [new Coordinate(59.0, 10.0), new Coordinate(59.3, 10.3)]);
 
         Assert.Collection(
             route.Segments,

@@ -7,6 +7,11 @@ public static class RouteForecastEndpoints
     // The interval selector offers these two choices; anything else is a bad request.
     private static readonly int[] AllowedIntervalMinutes = [30, 60];
 
+    // A route needs a start and an end; the upper bound caps the ORS request and the
+    // number of forecast lookups. The frontend enforces the same range.
+    private const int MinWaypoints = 2;
+    private const int MaxWaypoints = 10;
+
     public static void MapRouteForecastEndpoints(this WebApplication app)
     {
         // A stable, named logger for usage tracking. RouteForecastEndpoints is a
@@ -29,12 +34,26 @@ public static class RouteForecastEndpoints
                 return Results.BadRequest(
                     $"intervalMinutes must be one of {string.Join(", ", AllowedIntervalMinutes)}.");
 
+            var waypointCount = request.Waypoints?.Count ?? 0;
+            if (waypointCount < MinWaypoints || waypointCount > MaxWaypoints)
+                return Results.BadRequest(
+                    $"waypoints must contain between {MinWaypoints} and {MaxWaypoints} points.");
+
+            var waypoints = request.Waypoints!
+                .Select(point => new Coordinate(point.Lat, point.Lon))
+                .ToArray();
+
+            // A variable-length list can't keep fixed per-point placeholders, so the
+            // usage logs carry a stable count plus one compact joined form of the
+            // ordered coordinates (start first, destination last).
+            var waypointSummary = string.Join("; ",
+                waypoints.Select(c => $"{c.Latitude},{c.Longitude}"));
+
             RouteForecast forecast;
             try
             {
                 forecast = await routeForecast.GetRouteForecastAsync(
-                    new Coordinate(request.Origin.Lat, request.Origin.Lon),
-                    new Coordinate(request.Destination.Lat, request.Destination.Lon),
+                    waypoints,
                     request.DepartureTime,
                     TimeSpan.FromMinutes(request.IntervalMinutes),
                     cancellationToken);
@@ -45,9 +64,8 @@ public static class RouteForecastEndpoints
                 // Log the provider's reason (never shown to the user) and return a
                 // 422 the frontend maps to its own "no route" copy.
                 logger.LogWarning(
-                    "Route forecast has no route: {OriginLat},{OriginLon} -> {DestLat},{DestLon}: {Reason}",
-                    request.Origin.Lat, request.Origin.Lon,
-                    request.Destination.Lat, request.Destination.Lon, ex.Message);
+                    "Route forecast has no route: {WaypointCount} waypoints [{Waypoints}]: {Reason}",
+                    waypointCount, waypointSummary, ex.Message);
                 return Results.UnprocessableEntity(
                     new RouteForecastError("route_not_found", ex.Message));
             }
@@ -56,11 +74,9 @@ public static class RouteForecastEndpoints
                 // Expected, user-correctable outcome: the departure sits past met.no's
                 // hourly window. 422 with the forecast_unavailable discriminator.
                 logger.LogWarning(
-                    "Route forecast has no forecast: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                    "Route forecast has no forecast: {WaypointCount} waypoints [{Waypoints}] " +
                     "departing {DepartureTime:o}: {Reason}",
-                    request.Origin.Lat, request.Origin.Lon,
-                    request.Destination.Lat, request.Destination.Lon,
-                    request.DepartureTime, ex.Message);
+                    waypointCount, waypointSummary, request.DepartureTime, ex.Message);
                 return Results.UnprocessableEntity(
                     new RouteForecastError("forecast_unavailable", ex.Message));
             }
@@ -69,20 +85,17 @@ public static class RouteForecastEndpoints
                 // Unexpected failure: surface it with its inputs, then rethrow so the
                 // framework still produces its normal error response (a 500).
                 logger.LogError(ex,
-                    "Route forecast failed: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                    "Route forecast failed: {WaypointCount} waypoints [{Waypoints}] " +
                     "departing {DepartureTime:o} every {IntervalMinutes}min",
-                    request.Origin.Lat, request.Origin.Lon,
-                    request.Destination.Lat, request.Destination.Lon,
-                    request.DepartureTime, request.IntervalMinutes);
+                    waypointCount, waypointSummary, request.DepartureTime, request.IntervalMinutes);
                 throw;
             }
 
             logger.LogInformation(
-                "Route forecast requested: {OriginLat},{OriginLon} -> {DestLat},{DestLon} " +
+                "Route forecast requested: {WaypointCount} waypoints [{Waypoints}] " +
                 "departing {DepartureTime:o} every {IntervalMinutes}min; " +
                 "route {DistanceKm:F1}km/{DurationMin:F0}min, {SampleCount} samples",
-                request.Origin.Lat, request.Origin.Lon,
-                request.Destination.Lat, request.Destination.Lon,
+                waypointCount, waypointSummary,
                 request.DepartureTime, request.IntervalMinutes,
                 forecast.Route.TotalDistanceMeters / 1000.0,
                 forecast.Route.TotalDurationSeconds / 60.0,
@@ -109,12 +122,12 @@ public static class RouteForecastEndpoints
 }
 
 /// <summary>
-/// A route-forecast request: the two coordinates chosen on the map, when the
+/// A route-forecast request: the ordered waypoints chosen on the map (first is the
+/// start, last is the destination, any between are intermediate stops), when the
 /// traveller departs, and how often (in minutes) to sample the journey.
 /// </summary>
 public sealed record RouteForecastRequest(
-    PointDto Origin,
-    PointDto Destination,
+    IReadOnlyList<PointDto> Waypoints,
     DateTimeOffset DepartureTime,
     int IntervalMinutes);
 

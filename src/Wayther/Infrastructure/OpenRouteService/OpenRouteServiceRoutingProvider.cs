@@ -22,18 +22,16 @@ public sealed class OpenRouteServiceRoutingProvider(
     private readonly OpenRouteServiceOptions _options = options.Value;
 
     public async Task<Route> GetRouteAsync(
-        Coordinate origin,
-        Coordinate destination,
+        IReadOnlyList<Coordinate> waypoints,
         CancellationToken cancellationToken = default)
     {
-        // ORS expects [longitude, latitude] pairs. instructions=true yields the
+        // ORS expects [longitude, latitude] pairs, in visiting order (start first,
+        // destination last, intermediate stops between). instructions=true yields the
         // segments/steps whose per-step durations are the annotations we carry.
         var request = new OrsDirectionsRequest(
-            Coordinates:
-            [
-                [origin.Longitude, origin.Latitude],
-                [destination.Longitude, destination.Latitude],
-            ],
+            Coordinates: waypoints
+                .Select(point => new[] { point.Longitude, point.Latitude })
+                .ToArray(),
             Instructions: true);
 
         var path = $"/v2/directions/{_options.Profile}/geojson";

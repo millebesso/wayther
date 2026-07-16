@@ -9,8 +9,8 @@ namespace Wayther.Domain;
 public sealed record RouteForecast(Route Route, IReadOnlyList<RouteSample> Samples);
 
 /// <summary>
-/// The pure-Domain orchestrator. Given the two endpoints, a departure time and a
-/// sampling interval it resolves the route (via <see cref="IRoutingProvider"/>),
+/// The pure-Domain orchestrator. Given an ordered list of waypoints, a departure
+/// time and a sampling interval it resolves the route (via <see cref="IRoutingProvider"/>),
 /// works out where the traveller will be and when at each interval along it, and
 /// attaches the nearest-hour forecast (via <see cref="IWeatherProvider"/>) to each.
 /// Depends only on the two provider seams so it can be unit-tested with faked
@@ -37,16 +37,21 @@ public sealed class RouteForecastService(IRoutingProvider routing, IWeatherProvi
     private static readonly TimeSpan MaxForecastDistance = TimeSpan.FromHours(1);
 
     public async Task<RouteForecast> GetRouteForecastAsync(
-        Coordinate origin,
-        Coordinate destination,
+        IReadOnlyList<Coordinate> waypoints,
         DateTimeOffset departureTime,
         TimeSpan interval,
         CancellationToken cancellationToken = default)
     {
+        // A route is an ordered sequence of stops: the first is the start, the last
+        // the destination, any between are intermediate waypoints. Fewer than two
+        // points isn't a route — that's a caller bug, not a user-correctable outcome.
+        if (waypoints.Count < 2)
+            throw new ArgumentException("A route needs at least two waypoints.", nameof(waypoints));
+
         if (interval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(interval), interval, "Interval must be positive.");
 
-        var route = await routing.GetRouteAsync(origin, destination, cancellationToken);
+        var route = await routing.GetRouteAsync(waypoints, cancellationToken);
 
         var samples = new List<RouteSample>();
         foreach (var (position, time) in SampleRoute(route, departureTime, interval))
