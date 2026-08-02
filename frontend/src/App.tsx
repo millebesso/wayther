@@ -61,6 +61,14 @@ export default function App() {
   // copied/error feedback that reverts to idle after a moment.
   const [shareState, setShareState] = useState<ShareState>('idle')
 
+  // The Leaflet map instance, captured once it's ready, so the share-open flow can
+  // frame the route for a recipient who didn't build it.
+  const mapRef = useRef<L.Map | null>(null)
+  // Set true only when a /m/{id} share hydrates; consumed once by the next route
+  // resolution to frame the trip, then cleared. Author-driven edits never set it, so
+  // clicking or dragging pins never moves the map under the user.
+  const pendingFitRef = useRef(false)
+
   // If the page was opened via a /m/{id} share link, load the stored route once on
   // mount and hydrate the editor with it. A successful load becomes the recipient's
   // own working session, so we drop the /m/{id} from the address bar; a failed load
@@ -77,6 +85,9 @@ export default function App() {
         setDepartureDay(localDateKey(departAt))
         setDepartureMinutes(minutesOfDay(departAt))
         setSampleInterval(share.intervalMinutes)
+        // Frame the trip on the next route resolution: the map starts on its default
+        // view, and a recipient who didn't build the route would otherwise not see it.
+        pendingFitRef.current = true
         window.history.replaceState(null, '', '/')
       })
       .catch((err) => {
@@ -109,6 +120,8 @@ export default function App() {
         setRoute(result.geometry.map((p) => [p.lat, p.lon]))
         setSamples(result.samples)
         setError(null)
+        // A share just opened: frame the true road the recipient will trace.
+        consumePendingFit(result.geometry)
       })
       .catch((err) => {
         if (err.name === 'AbortError') return
@@ -117,6 +130,9 @@ export default function App() {
         setRoute([])
         setSamples([])
         setError(err instanceof RouteForecastRequestError ? err.code : 'generic')
+        // No polyline to frame, but a share still deserves orienting: fall back to the
+        // waypoints so the recipient sees where the trip is despite the failure.
+        consumePendingFit(waypoints)
       })
     return () => controller.abort()
   }, [waypoints, departure, sampleInterval])
@@ -128,6 +144,20 @@ export default function App() {
     const timer = setTimeout(() => setShareState('idle'), 2500)
     return () => clearTimeout(timer)
   }, [shareState])
+
+  // If a share is waiting to be framed, fit the map to `points` (the resolved route,
+  // or the waypoints when the forecast failed) and clear the flag so it fires once.
+  // A maxZoom cap keeps a short route at a town-level view instead of rooftop zoom.
+  function consumePendingFit(points: Point[]) {
+    if (!pendingFitRef.current) return
+    pendingFitRef.current = false
+    const map = mapRef.current
+    if (!map || points.length === 0) return
+    map.fitBounds(
+      L.latLngBounds(points.map((p) => [p.lat, p.lon] as [number, number])),
+      { padding: [48, 48], maxZoom: 13 },
+    )
+  }
 
   // A click adds a new stop at the end of the route; once the cap is reached the
   // gesture goes inert (the hint tells the user why).
@@ -166,7 +196,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="map-pane">
-        <MapContainer center={[59.91, 10.75]} zoom={6} className="map">
+        <MapContainer center={[59.91, 10.75]} zoom={6} className="map" ref={mapRef}>
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
