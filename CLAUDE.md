@@ -49,6 +49,11 @@ interval) under a 6-char base62 slug; opening `/m/{id}` (SPA fallback) has the f
 fresh forecast. Nothing about the weather is persisted, so a shared link always shows
 the current forecast for those inputs.
 
+## Git workflow
+
+Commit directly to `main` — don't create a feature branch first (commit only when
+asked, as usual).
+
 ## Agent skills
 
 ### Issue tracker
