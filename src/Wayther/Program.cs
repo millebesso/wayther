@@ -68,6 +68,7 @@ app.UseStaticFiles();
 
 app.MapHealthEndpoints();
 app.MapRouteForecastEndpoints();
+app.MapShareEndpoints();
 
 // SPA fallback: serve the React index.html for any non-file route that isn't
 // under /api, so unmatched API paths return 404 instead of the HTML shell.

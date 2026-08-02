@@ -7,13 +7,15 @@ type Point = { lat: number; lon: number }
 type Forecast = { symbolCode: string; temperatureCelsius: number; precipitationMm: number }
 type Sample = { lat: number; lon: number; time: string; forecast: Forecast }
 
-// The backend's 422 discriminator plus a catch-all for anything else that fails.
-type ForecastError = 'route_not_found' | 'forecast_unavailable' | 'generic'
+// The backend's 422 discriminator, a share-load failure, plus a catch-all for
+// anything else that fails.
+type ForecastError = 'route_not_found' | 'forecast_unavailable' | 'share_not_found' | 'generic'
 
 /** User-facing copy for each failure, shown in the timeline pane. */
 const ERROR_MESSAGES: Record<ForecastError, string> = {
   route_not_found: 'No route found. Try placing your points on or near a road — not in water or off-grid.',
   forecast_unavailable: 'No forecast reaches that far ahead yet. Try an earlier departure time.',
+  share_not_found: 'This shared link is invalid or has expired. Click the map to start a new route.',
   generic: 'Something went wrong fetching your forecast. Please try again.',
 }
 
@@ -55,6 +57,35 @@ export default function App() {
   const departure = useMemo(() => combineDayAndTime(departureDay, departureMinutes), [departureDay, departureMinutes])
   const [sampleInterval, setSampleInterval] = useState<Interval>(60)
 
+  // The Share button's transient status: sharing while the POST is in flight, then
+  // copied/error feedback that reverts to idle after a moment.
+  const [shareState, setShareState] = useState<ShareState>('idle')
+
+  // If the page was opened via a /m/{id} share link, load the stored route once on
+  // mount and hydrate the editor with it. A successful load becomes the recipient's
+  // own working session, so we drop the /m/{id} from the address bar; a failed load
+  // leaves it so a refresh retries, and surfaces the reason in the timeline pane.
+  useEffect(() => {
+    const id = shareIdFromPath(window.location.pathname)
+    if (!id) return
+
+    const controller = new AbortController()
+    fetchShare(id, controller.signal)
+      .then((share) => {
+        const departAt = new Date(share.departureTime)
+        setWaypoints(share.waypoints.map((p) => ({ lat: p.lat, lon: p.lon })))
+        setDepartureDay(localDateKey(departAt))
+        setDepartureMinutes(minutesOfDay(departAt))
+        setSampleInterval(share.intervalMinutes)
+        window.history.replaceState(null, '', '/')
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        setError(err instanceof RouteForecastRequestError ? err.code : 'generic')
+      })
+    return () => controller.abort()
+  }, [])
+
   // Changing the day changes which times are offered (today drops past slots), so
   // snap the selected time to the first available slot when it's no longer listed.
   useEffect(() => {
@@ -90,6 +121,14 @@ export default function App() {
     return () => controller.abort()
   }, [waypoints, departure, sampleInterval])
 
+  // The copied/error feedback on the Share button is momentary — revert it to idle
+  // shortly after it appears so the button returns to its normal "Share route" label.
+  useEffect(() => {
+    if (shareState !== 'copied' && shareState !== 'error') return
+    const timer = setTimeout(() => setShareState('idle'), 2500)
+    return () => clearTimeout(timer)
+  }, [shareState])
+
   // A click adds a new stop at the end of the route; once the cap is reached the
   // gesture goes inert (the hint tells the user why).
   function handleMapClick(point: Point) {
@@ -109,6 +148,19 @@ export default function App() {
   // samples once fewer than two remain, so this just empties the list.
   function handleClear() {
     setWaypoints([])
+  }
+
+  // Mint a share for the route currently on screen and copy its /m/{id} link to the
+  // clipboard. Create-on-demand: a row is stored only when the user actually shares.
+  async function handleShare() {
+    setShareState('sharing')
+    try {
+      const id = await createShare({ waypoints, departure, interval: sampleInterval })
+      await navigator.clipboard.writeText(`${window.location.origin}/m/${id}`)
+      setShareState('copied')
+    } catch {
+      setShareState('error')
+    }
   }
 
   return (
@@ -179,9 +231,19 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button type="button" className="clear-button" onClick={handleClear} disabled={waypoints.length === 0}>
-            Clear route
-          </button>
+          <div className="control-actions">
+            <button
+              type="button"
+              className="share-button"
+              onClick={handleShare}
+              disabled={samples.length === 0 || error !== null || shareState === 'sharing'}
+            >
+              {shareLabel(shareState)}
+            </button>
+            <button type="button" className="clear-button" onClick={handleClear} disabled={waypoints.length === 0}>
+              Clear route
+            </button>
+          </div>
         </div>
         {error ? (
           <p className="timeline-error">{ERROR_MESSAGES[error]}</p>
@@ -301,6 +363,59 @@ function waypointIcon(index: number, total: number): L.DivIcon {
   if (index === 0) return makePinIcon('A', originColor)
   if (index === total - 1) return makePinIcon('B', destinationColor)
   return makePinIcon(String(index), stopColor)
+}
+
+// The Share button walks idle → sharing (POST in flight) → copied/error, then back
+// to idle once the transient feedback times out.
+type ShareState = 'idle' | 'sharing' | 'copied' | 'error'
+
+/** The stored inputs a /m/{id} share returns, enough to reopen and re-forecast the trip. */
+type ShareResponse = { waypoints: Point[]; departureTime: string; intervalMinutes: Interval }
+
+function shareLabel(state: ShareState): string {
+  switch (state) {
+    case 'sharing':
+      return 'Copying…'
+    case 'copied':
+      return 'Link copied!'
+    case 'error':
+      return 'Copy failed'
+    default:
+      return 'Share route'
+  }
+}
+
+/** The slug of a `/m/{id}` share link, or null for any other path. */
+function shareIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/m\/([A-Za-z0-9]+)\/?$/)
+  return match ? match[1] : null
+}
+
+/**
+ * Loads a stored share by slug. A 404 (unknown or expired slug) becomes a
+ * `share_not_found` error; any other non-OK response is a generic failure.
+ */
+async function fetchShare(id: string, signal: AbortSignal): Promise<ShareResponse> {
+  const response = await fetch(`/api/shares/${id}`, { signal })
+  if (response.status === 404) throw new RouteForecastRequestError('share_not_found')
+  if (!response.ok) throw new RouteForecastRequestError('generic')
+  return response.json()
+}
+
+/** Persists the current route as a share and returns its slug. */
+async function createShare(input: { waypoints: Point[]; departure: string; interval: Interval }): Promise<string> {
+  const response = await fetch('/api/shares', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      waypoints: input.waypoints,
+      departureTime: input.departure,
+      intervalMinutes: input.interval,
+    }),
+  })
+  if (!response.ok) throw new Error('Failed to create share')
+  const body: { id: string } = await response.json()
+  return body.id
 }
 
 type RouteForecastResult = { geometry: Point[]; samples: Sample[] }

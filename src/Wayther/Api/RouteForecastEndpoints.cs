@@ -4,14 +4,6 @@ namespace Wayther.Api;
 
 public static class RouteForecastEndpoints
 {
-    // The interval selector offers these two choices; anything else is a bad request.
-    private static readonly int[] AllowedIntervalMinutes = [30, 60];
-
-    // A route needs a start and an end; the upper bound caps the ORS request and the
-    // number of forecast lookups. The frontend enforces the same range.
-    private const int MinWaypoints = 2;
-    private const int MaxWaypoints = 10;
-
     public static void MapRouteForecastEndpoints(this WebApplication app)
     {
         // A stable, named logger for usage tracking. RouteForecastEndpoints is a
@@ -30,15 +22,11 @@ public static class RouteForecastEndpoints
             RouteForecastService routeForecast,
             CancellationToken cancellationToken) =>
         {
-            if (!AllowedIntervalMinutes.Contains(request.IntervalMinutes))
-                return Results.BadRequest(
-                    $"intervalMinutes must be one of {string.Join(", ", AllowedIntervalMinutes)}.");
+            var validationError = RouteInputValidation.Validate(request.Waypoints, request.IntervalMinutes);
+            if (validationError is not null)
+                return Results.BadRequest(validationError);
 
-            var waypointCount = request.Waypoints?.Count ?? 0;
-            if (waypointCount < MinWaypoints || waypointCount > MaxWaypoints)
-                return Results.BadRequest(
-                    $"waypoints must contain between {MinWaypoints} and {MaxWaypoints} points.");
-
+            var waypointCount = request.Waypoints!.Count;
             var waypoints = request.Waypoints!
                 .Select(point => new Coordinate(point.Lat, point.Lon))
                 .ToArray();
